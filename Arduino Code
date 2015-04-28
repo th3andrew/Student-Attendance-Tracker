@@ -1,0 +1,282 @@
+/*
+ *Andrew Cotter
+ *B00064958
+ *ITB
+ *Year 3 Project
+ *Automatic Student Attendance Tracking System
+ *Supervisor: Ivan Smyth
+ *23/04/15
+ */
+
+
+#include <Wire.h>
+#include <Adafruit_NFCShield_I2C.h>   //Header files for Adafruit RFID Shield
+#include <Ethernet.h>                 //Header files for Ethernet 
+#include <SPI.h>                      //Header files for SPI protocol (Communication between Arduino and Shield)
+#include <LiquidCrystal.h>            //Header files for LCD 
+
+String PHP = "/mysql_getadd.php";     //Location of PHP file to receive data
+char building = 'E';                  //Building Device is Located in
+int room = 210;                       //Room Device is Located in
+
+int echo_test = 0;                    //Variable used for error detection in sending of data
+
+#define IRQ   (2)
+#define RESET (3)  
+Adafruit_NFCShield_I2C nfc(IRQ, RESET);//Defines for shield operation
+
+LiquidCrystal lcd(9, 8, 7, 6, 5, 3);  
+/*
+ * LCD RS pin to digital pin 9
+ * LCD Enable pin to digital pin 8
+ * LCD D4 pin to digital pin 7
+ * LCD D5 pin to digital pin 6
+ * LCD D6 pin to digital pin 5
+ * LCD D7 pin to digital pin 3
+ */
+
+byte mac[] = { 0x90, 0xA2, 0xDA, 0x0E, 0x0E, 0x96 };//Arduino MAC address
+byte ip[] = { 192, 168, 1, 2 };                     //Arduino IP address
+byte server[] = { 192, 168, 1, 1 };                 //Server IP address
+EthernetClient client;                              //Initiate Ethernet Client
+
+int nfc_init(void);      //Prototype for NFC initalise function
+int ethernet_init(void); //Prototype for ETHERNET initalise function
+
+void setup(void)
+{
+  Serial.begin(9600);//Set Baud rate for Serial Print
+  lcd.begin(16, 2);  //Initalise LCD display size
+  
+  nfc_init();        //Call NFC initlaise function
+  
+  ethernet_init();   //Call ETHERNET initalise function
+  
+  lcd.clear();       //Display message on LCD to indicate to user that device is ready
+  lcd.setCursor(0,0);
+  lcd.print("Waiting for ");
+  lcd.setCursor(0,1);
+  lcd.print("Student Card");
+}
+
+void loop(void)
+{
+
+  //***********************************************RFID**************************************************************************
+  
+  uint8_t success;
+  uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
+  uint8_t uidLength;                        // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
+    
+  // Wait for an ISO14443A type cards (Mifare, etc.).  When one is found
+  // 'uid' will be populated with the UID, and uidLength will indicate
+  // if the uid is 4 bytes (Mifare Classic)
+  success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
+  
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Waiting for ");
+  lcd.setCursor(0,1);
+  lcd.print("Student Card");
+  
+  if (success) 
+  {
+   
+      // Display some basic information about the card to Serial (Useful for debugging)
+      Serial.println("\n**Begin Card Read**");
+      Serial.println("Card Found");
+    
+      Serial.print("UID Length: ");
+      Serial.print(uidLength, DEC);
+      Serial.println(" bytes");
+    
+      Serial.print("UID Value: ");
+      nfc.PrintHex(uid, uidLength);
+      Serial.println("");
+    
+    
+    //******************************************Ethernet***********************************************************************
+       
+      //if device can reach server and card is presented, enter this loop 
+      if (client.connect(server, 80)) 
+      {
+         Serial.println("Connected and Sending...\n");
+         
+         //Display to user via LCD that card was detected succesfully and data is beng transmitted 
+         lcd.clear();
+         lcd.setCursor(0,0);
+         lcd.print("Card Detected");
+         lcd.setCursor(0,1);
+         lcd.print("Sending.");      //Sending begins. LCD Displays: Sending.
+        
+         //GET HTTP Request// 
+         client.print("GET ");       //HTTP request type keyword
+         client.print(PHP);          //Location of PHP script to handle card data
+         client.print("?");          //Indicates the begining of variables to be passed to script 
+         client.print("building=");  //Variable name
+         client.print(building);     //Variable value
+         client.print("&");          //Seperates each variable 
+         client.print("room=");
+         client.print(room);
+         client.print("&");
+         client.print("uid_0=");
+         client.print(uid[0]);
+         client.print("&");
+         client.print("uid_1=");
+         client.print(uid[1]);
+         client.print("&");
+         client.print("uid_2=");
+         client.print(uid[2]);
+         client.print("&");
+         client.print("uid_3=");
+         client.println(uid[3]);
+        
+         lcd.print(".");          //Http GET sent. LCD Displays: Sending..
+         delay(300);
+        
+         //Serial Print to show file data is sent to
+         Serial.print("Data Sent to ");
+         Serial.println(PHP);
+        
+         //Print PHP Echo to Serial Monitor - Shows data entering database
+         while(client.connected()) 
+         {
+              echo_test = 0;
+         
+              while(client.available()) 
+              {
+                char ch = client.read();
+                Serial.write(ch);
+            
+                echo_test++;
+              }
+         }
+         
+         lcd.print(".");         //Echo received back from server. LCD Displays: Sending...
+         delay(300);
+        
+         if(echo_test < 107)
+         {
+              Serial.println("\nNo data entered into database, retry card");
+              lcd.clear();
+              lcd.setCursor(0,0);
+              lcd.print("Error");
+              lcd.setCursor(0,1);
+              lcd.print("Please Retry");
+              delay(1000);
+          
+              lcd.clear();
+              lcd.setCursor(0,0);
+              lcd.print("Waiting for ");
+              lcd.setCursor(0,1);
+              lcd.print("Student Card");
+         }
+        
+         if(echo_test >= 107)
+         {
+              Serial.println("\nData successfully entered in database");
+              lcd.clear();
+              lcd.setCursor(0,0);
+              lcd.print("***Attendance***");
+              lcd.setCursor(0,1);
+              lcd.print("****Recorded****");
+              delay(1500);
+          
+              lcd.clear();
+              lcd.setCursor(0,0);
+              lcd.print("Waiting for ");
+              lcd.setCursor(0,1);
+              lcd.print("Student Card");
+          }
+        
+        //Close the Connection
+        client.stop();
+        Serial.println("\n\nDisconnected\n");
+ 
+        } 
+    
+        else 
+        {
+             Serial.println("Connection Failed");
+             Serial.println("Disconnected\n");
+             client.stop();
+      
+             lcd.clear();
+             lcd.setCursor(0,0);
+             lcd.print("Connection Fail");
+             lcd.setCursor(0,1);
+             lcd.print("Please Retry");
+             delay(1000);
+         }
+  
+   //*****************************************Ethernet End*****************************************************************************
+    
+   }
+   
+   //*****************************************RFID End*********************************************************************************
+
+  
+} //End of Main
+   
+   
+   
+//*****************************************Function Definitions*********************************************************************
+
+//******************************************NFC initalise function***********************************************************************
+int nfc_init(void)
+{
+  nfc.begin();      //Initalise Shield
+  
+  uint32_t versiondata = nfc.getFirmwareVersion();  //Check current firware version
+    
+  if (! versiondata) // Shield Not Attached, hold here permanently
+  {
+    Serial.println("No RFID Shield Found");
+    Serial.println("Attach PN53* Shield and Restart");
+    
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("No Shield Found");
+    lcd.setCursor(0,1);
+    delay(20);
+    lcd.print("Attach & Restart");
+    
+    while (1); //Hold here forever 
+  }
+  
+  //If sheild is attached print Data From shield printed to serial monitor
+  Serial.print("Found chip PN53"); 
+  Serial.println((versiondata>>24) & 0xFF, HEX); 
+  Serial.print("Firmware version"); 
+  Serial.print((versiondata>>16) & 0xFF, DEC); 
+  Serial.print('.'); 
+  Serial.println((versiondata>>8) & 0xFF, DEC);
+  
+  //Configure board to read RFID tags
+  nfc.SAMConfig();
+  Serial.println("Shield Configured");
+  return 0;
+}
+//**************************************************NFC initialise Function End**************************************
+
+
+//**************************************************Ethernet initalise Function*************************************
+int ethernet_init(void)
+{
+  //Begin Connection
+  Ethernet.begin(mac, ip);
+  
+  //Delay to allow arduino establish connection
+  Serial.println("Connecting...");
+
+  if (client.connect(server, 80))
+  {
+    Serial.println("Connected to Server");  
+  } 
+  else 
+  {
+    Serial.println("Connection to Server Failed\n\n");
+  } 
+  return 0;
+}
+//*************************************************Ethernet Test Function End************************************
